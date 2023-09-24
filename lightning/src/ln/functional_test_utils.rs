@@ -2730,6 +2730,37 @@ pub fn create_node_chanmgrs<'a, 'b>(node_count: usize, cfgs: &'a Vec<NodeCfg<'b>
 	chanmgrs
 }
 
+pub fn check_probe_events_path(nodes: Vec<&Node>) {
+	for (i, (upstream_node, downstream_node)) in nodes.iter().zip(nodes.iter().skip(1)).enumerate() {
+		let is_last_hop = i == nodes.len() - 2;
+
+		check_added_monitors!(upstream_node, 1);
+		let updates = get_htlc_update_msgs(&upstream_node, &downstream_node.node.get_our_node_id());
+		println!("UPDATE HTLCs: {}", updates.update_fail_htlcs.len());
+		let probe_event = SendEvent::from_commitment_update(downstream_node.node.get_our_node_id(), updates);
+		downstream_node.node.handle_update_add_htlc(&upstream_node.node.get_our_node_id(), &probe_event.msgs[0]);
+		check_added_monitors!(downstream_node, 0);
+
+		let events = upstream_node.node.get_and_clear_pending_events();
+		println!("EEVENTS LEN: {}", events.len());
+
+		if !is_last_hop {
+			commitment_signed_dance!(downstream_node, upstream_node, probe_event.commitment_msg, false);
+			expect_pending_htlcs_forwardable!(downstream_node);
+		} else {
+			commitment_signed_dance!(downstream_node, upstream_node, probe_event.commitment_msg, true, true);
+		}
+	}
+
+	for (i, (upstream_node, downstream_node)) in nodes.iter().rev().zip(nodes.iter().rev().skip(1)).enumerate() {
+		let is_last = i == nodes.len() - 2;
+		let updates = get_htlc_update_msgs!(upstream_node, downstream_node.node.get_our_node_id());
+		downstream_node.node.handle_update_fail_htlc(&upstream_node.node.get_our_node_id(), &updates.update_fail_htlcs[0]);
+		check_added_monitors!(downstream_node, 0);
+		commitment_signed_dance!(downstream_node, upstream_node, updates.commitment_signed, !is_last);
+	}
+}
+
 pub fn create_network<'a, 'b: 'a, 'c: 'b>(node_count: usize, cfgs: &'b Vec<NodeCfg<'c>>, chan_mgrs: &'a Vec<ChannelManager<&'b TestChainMonitor<'c>, &'c test_utils::TestBroadcaster, &'b test_utils::TestKeysInterface, &'b test_utils::TestKeysInterface, &'b test_utils::TestKeysInterface, &'c test_utils::TestFeeEstimator, &'c test_utils::TestRouter, &'c test_utils::TestLogger>>) -> Vec<Node<'a, 'b, 'c>> {
 	let mut nodes = Vec::new();
 	let chan_count = Rc::new(RefCell::new(0));

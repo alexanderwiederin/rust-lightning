@@ -3570,6 +3570,7 @@ where
 		let mut used_liquidity_map = HashMap::with_capacity(first_hops.len());
 
 		let mut res = Vec::new();
+		log_info!(self.logger, "Paths identified: {}", route.paths.len());
 
 		for mut path in route.paths {
 			// If the last hop is probably an unannounced channel we refrain from probing all the

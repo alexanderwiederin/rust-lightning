@@ -1306,6 +1306,54 @@ fn onchain_failed_probe_yields_event() {
 }
 
 #[test]
+fn preflight_probes_yield_event() {
+	let chanmon_cfgs = create_chanmon_cfgs(6);
+	let node_cfgs = create_node_cfgs(6, &chanmon_cfgs);
+
+	let mut no_htlc_limit_config = test_default_channel_config();
+	no_htlc_limit_config.channel_handshake_config.max_inbound_htlc_value_in_flight_percent_of_channel = 100;
+
+	let user_configs = std::iter::repeat(no_htlc_limit_config).take(6).map(|c| Some(c)).collect::<Vec<Option<UserConfig>>>();
+	let node_chanmgrs = create_node_chanmgrs(6, &node_cfgs, &user_configs);
+	let nodes = create_network(6, &node_cfgs, &node_chanmgrs);
+
+	// Setup channel topology:
+	//                    (30k:0)- N2 -(1M:0)
+	//                   /                  \
+	//  N0 -(100k:0)-> N1                    N4
+	//                   \                  /
+	//                    (70k:0)- N3 -(1M:0)
+	//
+
+	create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 1_000_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 1, 2, 30_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 1, 3, 70_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 1, 5, 70_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 2, 4, 1_000_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 3, 4, 1_000_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 5, 4, 1_000_000, 0);
+
+	let mut invoice_features = Bolt11InvoiceFeatures::empty();
+	invoice_features.set_basic_mpp_optional();
+
+	let mut payment_params = PaymentParameters::from_node_id(nodes[4].node.get_our_node_id(), TEST_FINAL_CLTV)
+		.with_bolt11_features(invoice_features).unwrap();
+
+	let route_params = RouteParameters { payment_params: payment_params.clone(), final_value_msat: 80_000_000 };
+	let res = nodes[0].node.send_preflight_probes(route_params, None).unwrap();
+	assert_eq!(res.len(), 2);
+
+	println!("NODE ID 0: {}", nodes[0].node.get_our_node_id());
+	println!("NODE ID 1: {}", nodes[1].node.get_our_node_id());
+	println!("NODE ID 2: {}", nodes[2].node.get_our_node_id());
+	println!("NODE ID 3: {}", nodes[3].node.get_our_node_id());
+	println!("NODE ID 4: {}", nodes[4].node.get_our_node_id());
+	println!("NODE ID 5: {}", nodes[5].node.get_our_node_id());
+	println!("HEELLLOOOO");
+	check_probe_events_path(vec![&nodes[0], &nodes[1], &nodes[3], &nodes[4]]);
+}
+
+#[test]
 fn preflight_probes_yield_event_and_skip() {
 	let chanmon_cfgs = create_chanmon_cfgs(5);
 	let node_cfgs = create_node_cfgs(5, &chanmon_cfgs);
@@ -1348,46 +1396,7 @@ fn preflight_probes_yield_event_and_skip() {
 
 	let (payment_hash, payment_id) = res.first().unwrap();
 
-	// node[0] -- update_add_htlcs -> node[1]
-	check_added_monitors!(nodes[0], 1);
-	let probe_event = SendEvent::from_node(&nodes[0]);
-	nodes[1].node.handle_update_add_htlc(&nodes[0].node.get_our_node_id(), &probe_event.msgs[0]);
-	check_added_monitors!(nodes[1], 0);
-	commitment_signed_dance!(nodes[1], nodes[0], probe_event.commitment_msg, false);
-	expect_pending_htlcs_forwardable!(nodes[1]);
-
-	// node[1] -- update_add_htlcs -> node[2]
-	check_added_monitors!(nodes[1], 1);
-	let probe_event = SendEvent::from_node(&nodes[1]);
-	nodes[2].node.handle_update_add_htlc(&nodes[1].node.get_our_node_id(), &probe_event.msgs[0]);
-	check_added_monitors!(nodes[2], 0);
-	commitment_signed_dance!(nodes[2], nodes[1], probe_event.commitment_msg, false);
-	expect_pending_htlcs_forwardable!(nodes[2]);
-
-	// node[2] -- update_add_htlcs -> node[4]
-	check_added_monitors!(nodes[2], 1);
-	let probe_event = SendEvent::from_node(&nodes[2]);
-	nodes[4].node.handle_update_add_htlc(&nodes[2].node.get_our_node_id(), &probe_event.msgs[0]);
-	check_added_monitors!(nodes[4], 0);
-	commitment_signed_dance!(nodes[4], nodes[2], probe_event.commitment_msg, true, true);
-
-	// node[2] <- update_fail_htlcs -- node[4]
-	let updates = get_htlc_update_msgs!(nodes[4], nodes[2].node.get_our_node_id());
-	nodes[2].node.handle_update_fail_htlc(&nodes[4].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	check_added_monitors!(nodes[2], 0);
-	commitment_signed_dance!(nodes[2], nodes[4], updates.commitment_signed, true);
-
-	// node[1] <- update_fail_htlcs -- node[2]
-	let updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	nodes[1].node.handle_update_fail_htlc(&nodes[2].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	check_added_monitors!(nodes[1], 0);
-	commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, true);
-
-	// node[0] <- update_fail_htlcs -- node[1]
-	let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
-	nodes[0].node.handle_update_fail_htlc(&nodes[1].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	check_added_monitors!(nodes[0], 0);
-	commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, false);
+	check_probe_events_path(vec![&nodes[0], &nodes[1], &nodes[2], &nodes[4]]);
 
 	let mut events = nodes[0].node.get_and_clear_pending_events();
 	assert_eq!(events.len(), 1);
