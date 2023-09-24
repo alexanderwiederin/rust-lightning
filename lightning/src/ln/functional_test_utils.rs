@@ -2735,9 +2735,8 @@ pub fn check_probe_events_path(nodes: Vec<&Node>) {
 		let is_last_hop = i == nodes.len() - 2;
 
 		check_added_monitors!(upstream_node, 1);
-		let updates = get_htlc_update_msgs(&upstream_node, &downstream_node.node.get_our_node_id());
-		println!("UPDATE HTLCs: {}", updates.update_fail_htlcs.len());
-		let probe_event = SendEvent::from_commitment_update(downstream_node.node.get_our_node_id(), updates);
+		let probe_event = SendEvent::from_node(upstream_node);
+		println!("UPDATE HTLCs: {}", probe_event.msgs.len());
 		downstream_node.node.handle_update_add_htlc(&upstream_node.node.get_our_node_id(), &probe_event.msgs[0]);
 		check_added_monitors!(downstream_node, 0);
 
