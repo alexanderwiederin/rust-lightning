@@ -1424,6 +1424,56 @@ fn onchain_failed_probe_yields_event() {
 }
 
 #[test]
+fn preflight_probes_yield_event() {
+	let chanmon_cfgs = create_chanmon_cfgs(5);
+	let node_cfgs = create_node_cfgs(5, &chanmon_cfgs);
+
+	// We alleviate the HTLC max-in-flight limit, as otherwise we'd always be limited through that.
+	let mut no_htlc_limit_config = test_default_channel_config();
+	no_htlc_limit_config.channel_handshake_config.max_inbound_htlc_value_in_flight_percent_of_channel = 100;
+
+	let user_configs = std::iter::repeat(no_htlc_limit_config).take(5).map(|c| Some(c)).collect::<Vec<Option<UserConfig>>>();
+	let node_chanmgrs = create_node_chanmgrs(5, &node_cfgs, &user_configs);
+	let nodes = create_network(5, &node_cfgs, &node_chanmgrs);
+
+	// Setup channel topology:
+	//                    (30k:0)- N2 -(1M:0)
+	//                   /                  \
+	//  N0 -(100k:0)-> N1                    N4
+	//                   \                  /
+	//                    (70k:0)- N3 -(1M:0)
+	//
+	let first_chan_update = create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 100_000, 0).0;
+	create_announced_chan_between_nodes_with_value(&nodes, 1, 2, 30_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 1, 3, 70_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 2, 4, 1_000_000, 0);
+	create_announced_chan_between_nodes_with_value(&nodes, 3, 4, 1_000_000, 0);
+
+	let mut invoice_features = Bolt11InvoiceFeatures::empty();
+	invoice_features.set_basic_mpp_optional();
+
+	let payment_params = PaymentParameters::from_node_id(nodes[4].node.get_our_node_id(), TEST_FINAL_CLTV)
+		.with_bolt11_features(invoice_features).unwrap();
+
+	let recv_value = 80_000_000;
+
+	let route_params = RouteParameters::from_payment_params_and_value(payment_params, recv_value);
+	let res = nodes[0].node.send_preflight_probes(route_params, None).unwrap();
+
+	let expected_route : &[&[&Node]] = &[&[&nodes[1], &nodes[2], &nodes[4]]];
+
+	assert_eq!(res.len(), expected_route.len());
+
+	let mut events = nodes[0].node.get_and_clear_pending_msg_events();
+	assert_eq!(events.len(), expected_route.len());
+	check_added_monitors!(nodes[0], expected_route.len());
+
+	let node_1_msgs = remove_first_msg_event_to_node(&nodes[1].node.get_our_node_id(), &mut events);
+
+	do_pass_along_path(&nodes[0], expected_route[0], recv_value, res[0].0, None, node_1_msgs, false, true, None, true);
+}
+
+#[test]
 fn preflight_probes_yield_event_and_skip() {
 	let chanmon_cfgs = create_chanmon_cfgs(5);
 	let node_cfgs = create_node_cfgs(5, &chanmon_cfgs);
